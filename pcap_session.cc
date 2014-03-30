@@ -107,6 +107,7 @@ PcapSession::Dispatch(const Arguments& args)
     }
 
     PcapSession* session = ObjectWrap::Unwrap<PcapSession>(args.This());
+    int packet_count = 0;
 
 #if NODE_VERSION_AT_LEAST(0,3,0)
     Local<Object> buffer_obj = args[0]->ToObject();
@@ -118,9 +119,18 @@ PcapSession::Dispatch(const Arguments& args)
     session->buffer_length = buffer_obj->length();
 #endif
 
-    int packet_count;
     do {
-        packet_count = pcap_dispatch(session->pcap_handle, 1, PacketReady, (u_char *)session);
+        pcap_t *handle  = session->pcap_handle;
+
+        if (session->pcap_handle) { // Check in case pcap_handle is closed
+            packet_count = pcap_dispatch(handle, 1, PacketReady, (u_char *)session);
+
+            if (packet_count == -2 &&
+                    session->pcap_handle != handle) { // handle has changed
+                            // i.e. .close() called
+                FinalizeClose(session, handle);
+            }
+        }
     } while (packet_count > 0);
 
     return scope.Close(Integer::NewFromUnsigned(packet_count));
@@ -302,10 +312,19 @@ PcapSession::Close(const Arguments& args)
         session->pcap_dump_handle = NULL;
     }
 
-    pcap_close(session->pcap_handle);
-    session->packet_ready_cb.Dispose();
+    pcap_t *handle = session->pcap_handle;
+
+    session->pcap_handle = 0;
+    pcap_breakloop(handle);
+
+    // FinalizeClose -- will be called by Dispatch()
 
     return Undefined();
+}
+
+void PcapSession::FinalizeClose(PcapSession *session, pcap_t *handle) {
+    pcap_close(handle);
+    session->packet_ready_cb.Dispose();
 }
 
 Handle<Value>
@@ -314,6 +333,10 @@ PcapSession::Fileno(const Arguments& args)
     HandleScope scope;
 
     PcapSession* session = ObjectWrap::Unwrap<PcapSession>(args.This());
+
+    if (!session->pcap_handle) { // In case pcap_handle is closed
+        return Undefined();
+    }
 
     int fd = pcap_get_selectable_fd(session->pcap_handle);
 
@@ -328,6 +351,10 @@ PcapSession::Stats(const Arguments& args)
     struct pcap_stat ps;
 
     PcapSession* session = ObjectWrap::Unwrap<PcapSession>(args.This());
+
+    if (!session->pcap_handle) { // In case pcap_handle is closed
+        return Undefined();
+    }
 
     if (pcap_stats(session->pcap_handle, &ps) == -1) {
         return ThrowException(Exception::Error(String::New("Error in pcap_stats")));
@@ -358,6 +385,11 @@ PcapSession::Inject(const Arguments& args)
     }
 
     PcapSession* session = ObjectWrap::Unwrap<PcapSession>(args.This());
+
+    if (!session->pcap_handle) { // In case pcap_handle is closed
+        return Undefined();
+    }
+
     char * bufferData = NULL;
     size_t bufferLength = 0;
 #if NODE_VERSION_AT_LEAST(0,3,0)

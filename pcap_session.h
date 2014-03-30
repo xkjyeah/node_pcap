@@ -4,6 +4,8 @@
 #include <node.h>
 #include <pcap/pcap.h>
 
+#include <semaphore.h>
+
 class PcapSession : public node::ObjectWrap {
 public:
     static void Init(v8::Handle<v8::Object> exports);
@@ -22,6 +24,7 @@ private:
     static v8::Handle<v8::Value> Stats(const v8::Arguments& args);
     static v8::Handle<v8::Value> Inject(const v8::Arguments& args);
     static void PacketReady(u_char *callback_p, const struct pcap_pkthdr* pkthdr, const u_char* packet);
+    static void FinalizeClose(PcapSession *session, pcap_t *handle);
 
     v8::Persistent<v8::Function> packet_ready_cb;
 
@@ -32,6 +35,8 @@ private:
     pcap_dumper_t *pcap_dump_handle;
     char *buffer_data;
     size_t buffer_length;
+
+    bool closing;
 };
 
 #endif
